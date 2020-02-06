@@ -1,7 +1,7 @@
-Alacritty
-=========
-
-[![Travis build Status](https://travis-ci.org/jwilm/alacritty.svg?branch=master)](https://travis-ci.org/jwilm/alacritty)
+<h1 align="center">Alacritty</h1>
+<p align="center">
+    <img width="200" alt="Alacritty Logo" src="extra/logo/alacritty-term+scanlines.svg">
+</p>
 
 Alacritty is the fastest terminal emulator in existence. Using the GPU for
 rendering enables optimizations that simply aren't possible without it.
@@ -33,6 +33,7 @@ Precompiled binaries are available from the [GitHub releases page](https://githu
 - [Announcing Alacritty, a GPU-Accelerated Terminal Emulator](https://jwilm.io/blog/announcing-alacritty/) January 6, 2017
 - [A short talk about Alacritty at the Rust Meetup January 2017](https://air.mozilla.org/rust-meetup-january-2017/) (starts at 57:00)
 - [Alacritty Lands Scrollback, Publishes Benchmarks](https://jwilm.io/blog/alacritty-lands-scrollback/) September 17, 2018
+- [Version 0.3.0 Release Announcement](https://blog.christianduerr.com/alacritty_030_announcement) April 07, 2019
 
 ## Installation
 
@@ -45,17 +46,18 @@ else the instructions to build Alacritty from source can be found [here](INSTALL
 pacman -S alacritty
 ```
 
-### openSUSE Tumbleweed
+### Fedora
 
-```sh
-zypper in alacritty
+Unofficial builds of stable tags can be found in Fedora Copr:
+[pschyska/alacritty](https://copr.fedorainfracloud.org/coprs/pschyska/alacritty/).
+
+``` sh
+dnf copr enable pschyska/alacritty
+dnf install alacritty
 ```
 
-### Void Linux
-
-```sh
-xbps-install alacritty
-```
+If you want to help test pre-releases, you can additionally enable
+[pschyska/alacritty-testing](https://copr.fedorainfracloud.org/coprs/pschyska/alacritty-testing/).
 
 ### Gentoo Linux
 
@@ -63,16 +65,10 @@ xbps-install alacritty
 emerge x11-terms/alacritty
 ```
 
-### Mageia 7+
+### Mageia
 
 ```sh
 urpmi alacritty
-```
-
-### FreeBSD
-
-```sh
-pkg install alacritty
 ```
 
 ### NixOS
@@ -81,10 +77,40 @@ pkg install alacritty
 nix-env -iA nixos.alacritty
 ```
 
+### openSUSE Tumbleweed
+
+```sh
+zypper in alacritty
+```
+
+### Pop!\_OS / Ubuntu
+
+> If you're not running Pop!_OS, you'll have to add a third party repository first:
+>
+> ```sh
+> add-apt-repository ppa:mmstick76/alacritty
+> ```
+
+```sh
+apt install alacritty
+```
+
 ### Solus
 
 ```sh
 eopkg install alacritty
+```
+
+### Void Linux
+
+```sh
+xbps-install alacritty
+```
+
+### FreeBSD
+
+```sh
+pkg install alacritty
 ```
 
 ### macOS
@@ -121,32 +147,31 @@ API. The agent is a single binary (`winpty-agent.exe`) which **must** be in
 the same directory as the Alacritty executable and is available through the
 [GitHub releases page](https://github.com/jwilm/alacritty/releases).
 
+On Windows, Alacritty also requires Microsoft's VC++ redistributable to work
+properly.
+
 ## Configuration
 
-Although it's possible the default configuration would work on your system,
-you'll probably end up wanting to customize it anyhow. There is a default
-`alacritty.yml` at the Git repository root. Alacritty looks for the
-configuration file at the following paths:
+You can find the default configuration file with documentation for all available
+fields on the [GitHub releases page](https://github.com/jwilm/alacritty/releases) for each release.
+
+Alacritty looks for the configuration file at the following paths:
 
 1. `$XDG_CONFIG_HOME/alacritty/alacritty.yml`
 2. `$XDG_CONFIG_HOME/alacritty.yml`
 3. `$HOME/.config/alacritty/alacritty.yml`
 4. `$HOME/.alacritty.yml`
 
-If none of these paths are found then
-`$XDG_CONFIG_HOME/alacritty/alacritty.yml` is created once Alacritty is first
-run. On most systems this often defaults to
-`$HOME/.config/alacritty/alacritty.yml`.
-
-Many configuration options will take effect immediately upon saving changes to
-the config file. For more information about the config file structure, refer to
-the default config file.
-
 ### Windows
 
 On Windows the config file is located at:
 
 `%APPDATA%\alacritty\alacritty.yml`
+
+## Contributing
+
+A full guideline about contributing to Alacritty can be found in the
+[`CONTRIBUTING.md`](CONTRIBUTING.md) file.
 
 ## Issues (known, unknown, feature requests, etc.)
 
@@ -195,16 +220,12 @@ Alacritty discussion can be found in `#alacritty` on freenode.
 
 ## Wayland
 
-Wayland support is available, but not everything works as expected. Many people
-have found a better experience using XWayland which can be achieved by
-launching Alacritty with the `WAYLAND_DISPLAY` environment variable cleared:
+Wayland is used by default on systems that support it. Using XWayland may
+circumvent Wayland specific issues and can be enabled through:
 
 ```sh
-env WAYLAND_DISPLAY="" alacritty
+env WINIT_UNIX_BACKEND=x11 alacritty
 ```
-
-If you're interested in seeing our Wayland support improve, please head over to
-the [Wayland meta issue] on the _winit_ project to see how you may contribute.
 
 ## License
 

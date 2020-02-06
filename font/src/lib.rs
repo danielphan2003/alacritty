@@ -42,11 +42,15 @@ extern crate libc;
 #[macro_use]
 extern crate foreign_types;
 
+#[cfg(not(any(target_os = "macos", windows)))]
+extern crate harfbuzz_rs;
+
 #[cfg_attr(not(windows), macro_use)]
 extern crate log;
 
+use std::fmt;
 use std::hash::{Hash, Hasher};
-use std::{fmt, cmp};
+use std::ops::{Add, Mul};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 // If target isn't macos or windows, reexport everything from ft
@@ -56,9 +60,9 @@ pub mod ft;
 pub use ft::{Error, FreeTypeRasterizer as Rasterizer};
 
 #[cfg(windows)]
-pub mod rusttype;
+pub mod directwrite;
 #[cfg(windows)]
-pub use crate::rusttype::{Error, RustTypeRasterizer as Rasterizer};
+pub use crate::directwrite::{DirectWriteRasterizer as Rasterizer, Error};
 
 // If target is macos, reexport everything from darwin
 #[cfg(target_os = "macos")]
@@ -66,20 +70,8 @@ mod darwin;
 #[cfg(target_os = "macos")]
 pub use darwin::*;
 
-/// Width/Height of the cursor relative to the font width
-pub const CURSOR_WIDTH_PERCENTAGE: i32 = 15;
-
-/// Character used for the underline cursor
-// This is part of the private use area and should not conflict with any font
-pub const UNDERLINE_CURSOR_CHAR: char = '\u{10a3e2}';
-
-/// Character used for the beam cursor
-// This is part of the private use area and should not conflict with any font
-pub const BEAM_CURSOR_CHAR: char = '\u{10a3e3}';
-
-/// Character used for the empty box cursor
-// This is part of the private use area and should not conflict with any font
-pub const BOX_CURSOR_CHAR: char = '\u{10a3e4}';
+/// Placeholder glyph key that represents a blank gylph
+pub const PLACEHOLDER_GLYPH: KeyType = KeyType::Placeholder;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FontDesc {
@@ -113,7 +105,7 @@ impl fmt::Display for Style {
             Style::Specific(ref s) => f.write_str(&s),
             Style::Description { slant, weight } => {
                 write!(f, "slant={:?}, weight={:?}", slant, weight)
-            }
+            },
         }
     }
 }
@@ -123,10 +115,7 @@ impl FontDesc {
     where
         S: Into<String>,
     {
-        FontDesc {
-            name: name.into(),
-            style,
-        }
+        FontDesc { name: name.into(), style }
     }
 }
 
@@ -149,42 +138,46 @@ impl FontKey {
     pub fn next() -> FontKey {
         static TOKEN: AtomicUsize = AtomicUsize::new(0);
 
-        FontKey {
-            token: TOKEN.fetch_add(1, Ordering::SeqCst) as _,
-        }
+        FontKey { token: TOKEN.fetch_add(1, Ordering::SeqCst) as _ }
     }
 }
 
-#[derive(Debug, Copy, Clone, Eq)]
+/// Captures possible outcomes of shaping, if shaping succeeded it will return a `GlyphIndex`.
+/// If shaping failed or did not occur, `Fallback` will be returned.
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum KeyType {
+    /// A valid glyph index from Font face to be rasterized to a glyph
+    GlyphIndex(u32),
+    /// A character that has not been converted to an index before rasterizing
+    Char(char),
+    /// Placeholder glyph useful when we need a glyph but it shouldn't ever render as anything
+    /// (cursors, wide_char_spacers, etc.)
+    Placeholder,
+}
+
+impl Default for KeyType {
+    fn default() -> Self {
+        PLACEHOLDER_GLYPH
+    }
+}
+
+impl From<u32> for KeyType {
+    fn from(val: u32) -> Self {
+        KeyType::GlyphIndex(val)
+    }
+}
+
+impl From<char> for KeyType {
+    fn from(val: char) -> Self {
+        KeyType::Char(val)
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, Hash, PartialEq)]
 pub struct GlyphKey {
-    pub c: char,
+    pub id: KeyType,
     pub font_key: FontKey,
     pub size: Size,
-}
-
-impl Hash for GlyphKey {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        unsafe {
-            // This transmute is fine:
-            //
-            // - If GlyphKey ever becomes a different size, this will fail to compile
-            // - Result is being used for hashing and has no fields (it's a u64)
-            ::std::mem::transmute::<GlyphKey, u64>(*self)
-        }.hash(state);
-    }
-}
-
-impl PartialEq for GlyphKey {
-    fn eq(&self, other: &Self) -> bool {
-        unsafe {
-            // This transmute is fine:
-            //
-            // - If GlyphKey ever becomes a different size, this will fail to compile
-            // - Result is being used for equality checking and has no fields (it's a u64)
-            let other = ::std::mem::transmute::<GlyphKey, u64>(*other);
-            ::std::mem::transmute::<GlyphKey, u64>(*self).eq(&other)
-        }
-    }
 }
 
 /// Font size stored as integer
@@ -192,15 +185,15 @@ impl PartialEq for GlyphKey {
 pub struct Size(i16);
 
 impl Size {
+    /// Create a new `Size` from a f32 size in points
+    pub fn new(size: f32) -> Size {
+        Size((size * Size::factor()) as i16)
+    }
+
     /// Scale factor between font "Size" type and point size
     #[inline]
     pub fn factor() -> f32 {
         2.0
-    }
-
-    /// Create a new `Size` from a f32 size in points
-    pub fn new(size: f32) -> Size {
-        Size((size * Size::factor()) as i16)
     }
 
     /// Get the f32 size in points
@@ -209,16 +202,31 @@ impl Size {
     }
 }
 
-impl ::std::ops::Add for Size {
+impl<T: Into<Size>> Add<T> for Size {
     type Output = Size;
 
-    fn add(self, other: Size) -> Size {
-        Size(self.0.saturating_add(other.0))
+    fn add(self, other: T) -> Size {
+        Size(self.0.saturating_add(other.into().0))
     }
 }
 
+impl<T: Into<Size>> Mul<T> for Size {
+    type Output = Size;
+
+    fn mul(self, other: T) -> Size {
+        Size(self.0 * other.into().0)
+    }
+}
+
+impl From<f32> for Size {
+    fn from(float: f32) -> Size {
+        Size::new(float)
+    }
+}
+
+#[derive(Clone, Default)]
 pub struct RasterizedGlyph {
-    pub c: char,
+    pub c: KeyType,
     pub width: i32,
     pub height: i32,
     pub top: i32,
@@ -226,96 +234,11 @@ pub struct RasterizedGlyph {
     pub buf: Vec<u8>,
 }
 
-impl Default for RasterizedGlyph {
-    fn default() -> RasterizedGlyph {
-        RasterizedGlyph {
-            c: ' ',
-            width: 0,
-            height: 0,
-            top: 0,
-            left: 0,
-            buf: Vec::new(),
-        }
-    }
-}
-
-// Returns a custom underline cursor character
-pub fn get_underline_cursor_glyph(descent: i32, width: i32) -> Result<RasterizedGlyph, Error> {
-    // Create a new rectangle, the height is relative to the font width
-    let height = cmp::max(width * CURSOR_WIDTH_PERCENTAGE / 100, 1);
-    let buf = vec![255u8; (width * height * 3) as usize];
-
-    // Create a custom glyph with the rectangle data attached to it
-    Ok(RasterizedGlyph {
-        c: UNDERLINE_CURSOR_CHAR,
-        top: descent + height,
-        left: 0,
-        height,
-        width,
-        buf,
-    })
-}
-
-// Returns a custom beam cursor character
-pub fn get_beam_cursor_glyph(
-    ascent: i32,
-    height: i32,
-    width: i32,
-) -> Result<RasterizedGlyph, Error> {
-    // Create a new rectangle that is at least one pixel wide
-    let beam_width = cmp::max(width * CURSOR_WIDTH_PERCENTAGE / 100, 1);
-    let buf = vec![255u8; (beam_width * height * 3) as usize];
-
-    // Create a custom glyph with the rectangle data attached to it
-    Ok(RasterizedGlyph {
-        c: BEAM_CURSOR_CHAR,
-        top: ascent,
-        left: 0,
-        height,
-        width: beam_width,
-        buf,
-    })
-}
-
-// Returns a custom box cursor character
-pub fn get_box_cursor_glyph(
-    ascent: i32,
-    height: i32,
-    width: i32,
-) -> Result<RasterizedGlyph, Error> {
-    // Create a new box outline rectangle
-    let border_width = cmp::max(width * CURSOR_WIDTH_PERCENTAGE / 100, 1);
-    let mut buf = Vec::with_capacity((width * height * 3) as usize);
-    for y in 0..height {
-        for x in 0..width {
-            if y < border_width || y >= height - border_width ||
-               x < border_width || x >= width - border_width {
-                buf.append(&mut vec![255u8; 3]);
-            } else {
-                buf.append(&mut vec![0u8; 3]);
-            }
-        }
-    }
-
-    // Create a custom glyph with the rectangle data attached to it
-    Ok(RasterizedGlyph {
-        c: BOX_CURSOR_CHAR,
-        top: ascent,
-        left: 0,
-        height,
-        width,
-        buf,
-    })
-}
-
 struct BufDebugger<'a>(&'a [u8]);
 
 impl<'a> fmt::Debug for BufDebugger<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("GlyphBuffer")
-            .field("len", &self.0.len())
-            .field("bytes", &self.0)
-            .finish()
+        f.debug_struct("GlyphBuffer").field("len", &self.0.len()).field("bytes", &self.0).finish()
     }
 }
 
@@ -332,6 +255,7 @@ impl fmt::Debug for RasterizedGlyph {
     }
 }
 
+#[derive(Copy, Clone)]
 pub struct Metrics {
     pub average_advance: f64,
     pub line_height: f64,
@@ -346,8 +270,11 @@ pub trait Rasterize {
     /// Errors occurring in Rasterize methods
     type Err: ::std::error::Error + Send + Sync + 'static;
 
-    /// Create a new Rasterizer
-    fn new(device_pixel_ratio: f32, use_thin_strokes: bool) -> Result<Self, Self::Err>
+    fn new(
+        device_pixel_ratio: f32,
+        use_thin_strokes: bool,
+        ligatures: bool,
+    ) -> Result<Self, Self::Err>
     where
         Self: Sized;
 
@@ -362,4 +289,11 @@ pub trait Rasterize {
 
     /// Update the Rasterizer's DPI factor
     fn update_dpr(&mut self, device_pixel_ratio: f32);
+}
+
+/// Extends the Rasterizer with Harfbuzz specific functionality.
+#[cfg(not(any(target_os = "macos", windows)))]
+pub trait HbFtExt {
+    /// Shape the provided text into a set of glyphs.
+    fn shape(&mut self, text: &str, font_key: FontKey) -> harfbuzz_rs::GlyphBuffer;
 }
